@@ -17,11 +17,7 @@ type Application struct {
 }
 
 func Initialize(name string, version Version) *Application {
-	if len(name) == 0 {
-		name = os.Executable()
-	}
-
-	return &Application{
+	app := &Application{
 		Name:    name,
 		Version: version,
 		IO: &IO{
@@ -36,4 +32,14 @@ func Initialize(name string, version Version) *Application {
 			Path: filesystem.Path{fmt.Sprintf("/home/%s/%s/%s", os.Getenv("USER"), ".config", name)},
 		},
 	}
+
+	if _, err := os.Stat(app.Data.Path); os.IsNotExist(err) {
+		_ = os.MkdirAll(app.Data.Path, os.FileMode(0770))
+	}
+
+	if _, err := os.Stat(app.Config.Path); os.IsNotExist(err) {
+		_ = os.MkdirAll(app.Config.Path, os.FileMode(0770))
+	}
+
+	return app
 }
