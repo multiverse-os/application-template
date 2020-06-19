@@ -3,11 +3,14 @@
 ## Multiverse: Application Template 
 **URL** [multiverse-os.org](https://multiverse-os.org)
 
-This will be used with the in development `laboratory` library intended to
-provide templates for the scaffolding functionality intended to speed up
-creation of database objects, and controller interactions that are used in the
+An application template for use as a skeleton/boilerplate that can be the basis 
+of a template for Multiverse OS's `laboratory` development framework. Intended 
+to simplify, enhance, and speed-up the development of Multiverse OS
+applications. 
+
+This template can serve as its own boilerplate, providing scaffolding for either 
 command-line interface (CLI), the web interface or web server daemon, or a 
-graphical user interface (GUI). 
+graphical user interface (GUI) application.  
 
 The Multiverse OS design guide outlines a structure that is required by all core
 utilities and applications included by default (the default is defined by the
