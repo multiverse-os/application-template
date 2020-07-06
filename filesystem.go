@@ -21,26 +21,24 @@ func (self Path) String() string { return string(self) }
 
 //func (self Directory) Path() string { return self.path.String() }
 
-func (self Directory) Directory(directory string) Directory {
-	return Directory{
-		path: Path(fmt.Sprintf("%s/%s/", self.path.String(), directory)),
-	}
+func (self Path) Directory(directory string) Path {
+	return Path(fmt.Sprintf("%s/%s/", self.String(), directory))
 }
 
-func (self Directory) Name() string { return filepath.Base(self.String()) }
+func (self Directory) Name() string { return filepath.Base(Path(self).String()) }
 
 func (self File) Name() string {
-	return filepath.Base(self.String())
+	return filepath.Base(Path(self).String())
 }
 
 func (self File) Basename() string {
-	return self.Filename[0:(len(self.Filename) - len(filepath.Ext(self.String())))]
+	return self.Name()[0:(len(self.Name()) - len(self.Extension()))]
 }
 
-func (self File) Extension() string { return filepath.Ext(self.String()) }
+func (self File) Extension() string { return filepath.Ext(Path(self).String()) }
 
 func (self Directory) File(filename string) Path {
-	return Path(fmt.Sprintf("%s/%s", self.path.String(), filename))
+	return Path(fmt.Sprintf("%s/%s", Path(self).String(), filename))
 }
 
 // NOTE: Create directories if they don't exist, or simply create the
@@ -48,9 +46,7 @@ func (self Directory) File(filename string) Path {
 func (self Path) Create(permissions os.FileMode) (*os.File, error) {
 	baseDirectory := filepath.Dir(self.String())
 	switch baseDirectory {
-	case ".":
-		return nil, fmt.Errorf("error: already exists")
-	case "..":
+	case ".", "..", "/":
 		return nil, fmt.Errorf("error: already exists")
 	default:
 		os.MkdirAll(baseDirectory, os.ModePerm)
