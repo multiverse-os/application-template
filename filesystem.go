@@ -13,19 +13,31 @@ import (
 // complex at all; but also should make working with filesystems very natural,
 // and even have validation for security.
 
-type Directory struct {
-	Name string
-	path Path
-}
-
 type Path string
+type File Path
+type Directory Path
 
-func (self Path) String() string    { return string(self) }
-func (self Directory) Path() string { return self.path.String() }
+func (self Path) String() string { return string(self) }
 
-func (self Directory) Directory(directory string) Path {
-	return Path(fmt.Sprintf("%s/%s/", self.path.String(), directory))
+//func (self Directory) Path() string { return self.path.String() }
+
+func (self Directory) Directory(directory string) Directory {
+	return Directory{
+		path: Path(fmt.Sprintf("%s/%s/", self.path.String(), directory)),
+	}
 }
+
+func (self Directory) Name() string { return filepath.Base(self.String()) }
+
+func (self File) Name() string {
+	return filepath.Base(self.String())
+}
+
+func (self File) Basename() string {
+	return self.Filename[0:(len(self.Filename) - len(filepath.Ext(self.String())))]
+}
+
+func (self File) Extension() string { return filepath.Ext(self.String()) }
 
 func (self Directory) File(filename string) Path {
 	return Path(fmt.Sprintf("%s/%s", self.path.String(), filename))
@@ -67,11 +79,12 @@ func (self Path) Remove() error {
 
 // Validation /////////////////////////////////////////////////////////////////
 func (self Path) Clean() Path {
-	path := Path(filepath.Clean(self.String()))
+	path := filepath.Clean(self.String())
 	if filepath.IsAbs(path) {
 		return Path(path)
 	} else {
-		return Path(filepath.Abs(path))
+		path, _ = filepath.Abs(path)
+		return Path(path)
 	}
 }
 
