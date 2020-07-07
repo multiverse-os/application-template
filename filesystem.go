@@ -1,6 +1,7 @@
-package mumble
+package filesystem
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -8,7 +9,9 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
+	"time"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -340,6 +343,7 @@ func (self File) Open() *os.File {
 
 // IO: Reads //////////////////////////////////////////////////////////////////
 
+// NOTE: Simply read ALL bytes
 func (self File) Bytes() (output []byte) {
 	if self.Path().Exists() {
 		output, err := ioutil.ReadFile(self.String())
@@ -353,21 +357,97 @@ func (self File) Bytes() (output []byte) {
 	return output
 }
 
+// NOTE: This is essentially a Head as is
+func (self File) HeadBytes(limitSize int) ([]byte, error) {
+	var limitBytes []byte
+	file := self.Open()
+	readBytes, err := io.ReadAtLeast(file, limitBytes, limitSize)
+	if readBytes != limitSize {
+		return limitBytes, fmt.Errorf("error: failed to complete read: read ", readBytes, " out of ", limitSize, "bytes")
+	} else {
+		return limitBytes, err
+	}
+}
+
+// NOTE: This is essentially a Head as is
+func (self File) TailBytes(limitSize int) ([]byte, error) {
+	var limitBytes []byte
+	file := self.Open()
+
+	readBytes, err := io.ReadAtLeast(file, limitBytes, limitSize)
+	if readBytes != limitSize {
+		return limitBytes, fmt.Errorf("error: failed to complete read: read ", readBytes, " out of ", limitSize, "bytes")
+	} else {
+		return limitBytes, err
+	}
+}
+
+type ReadType int
+
+const (
+	NoLock ReadType = iota
+	Lock
+	Parallel // Async?
+)
+
+type Read struct {
+	Type   ReadType
+	ReadAt time.Time
+	File   File
+	Offset int
+	Limit  int
+	Data   []byte
+}
+
+// API will be:
+//  File("test.yml").Read().Offset(5).Length(25).Bytes()
+// and maybe we do Read(Parallel) ->  (or Async)
+// use sectional reading + multireader to reassmble
+//                 Read(Lock) ->
+//                   lock with a file based atomic lock, or os based
+//                Read(NoLock) ->
+//
+
+// NOTE: This is essentially a Head as is
+func (self File) Read(readType ReadType) *Read {
+	return &Read{
+		Type:   readType,
+		File:   self,
+		Offset: 0,
+		Limit:  limitSize,
+		Data:   make([]byte),
+	}
+}
+
+func (self *Read) Path() Path {
+	return self.File.Path()
+}
+
 //func (self File) Offset(offsetSize int) *os.File {
 //		self.Open()
 //		return se.Seek(6, 0)
 //}
 
-func (self File) Limit(limitSize int) ([]byte, error) {
-	var headBytes []byte
-	file := self.Open()
-	readBytes, err := io.ReadAtLeast(file, headBytes, limitSize)
-	if readBytes != limitSize {
-		return headBytes, fmt.Errorf("error: failed to complete read: read ", readBytes, " out of ", limitSize, "bytes")
-	} else {
-		return headBytes, err
-	}
-}
+// TODO:
+// If over x size, split into chunks of X, then do section reads, then use
+// multireader to cocnat all those for parallellism that doesn't fuck itself.
+
+// Defining readers using NewReader method
+//reader1 := strings.NewReader("104\n")
+//reader2 := strings.NewReader("33.3\n")
+//reader3 := strings.NewReader("703243242\n")
+
+//// Calling MultiReader method with its parameters
+//r := io.MultiReader(reader1, reader2, reader3)
+
+// TODO: End with Read? Meaning our API is:
+//  File("thing.yml").Limit(20).Offset(14).Read() => []byte
+//
+// And open only happens on the read, auto-closes, and does read-only open, and
+// can even lock, with a Lock() fucntion most likely.
+
+//
+// func (self File) Read() []byte  {}
 
 // Need stream and zerocopy
 
@@ -394,4 +474,196 @@ func (self Path) IsDirectory() bool {
 
 func (self Path) IsFile() bool {
 	return self.Metadata().Mode().IsRegular()
+}
+
+///////////////////////////////////////////////////////////////////////////////
+type Lock struct {
+	mu   sync.Mutex
+	rwmu sync.RWMutex
+	w    int
+	r    int
+}
+
+// Lock locks m and wait until all other Lock or RLock is unlocked.
+func (m *RWLock) Lock() {
+	m.mu.Lock()
+	m.w++
+	if m.r > 0 || m.w > 1 {
+		// other one already acquired lock. wait outside of m.mu lock
+		m.mu.Unlock()
+		m.rwmu.Lock()
+	} else {
+		// m.rwmu.Lock() never blocks
+		m.rwmu.Lock()
+		m.mu.Unlock()
+	}
+}
+
+// TryLock try to lock m. returns false if fails.
+func (m *TRWMutex) TryLock() bool {
+	m.mu.Lock()
+	if m.r > 0 || m.w > 0 {
+		// other one already acquired lock.
+		m.mu.Unlock()
+		return false
+	}
+	m.w++
+	// m.rwmu.Lock() never blocks
+	m.rwmu.Lock()
+	m.mu.Unlock()
+	return true
+}
+
+// Unlock unlocks m.
+func (m *TRWMutex) Unlock() {
+	m.mu.Lock()
+	m.w--
+	m.rwmu.Unlock()
+	m.mu.Unlock()
+}
+
+// RLock locks m shared and until other Lock is unlocked.
+func (m *TRWMutex) RLock() {
+	m.mu.Lock()
+	m.r++
+	if m.w > 0 {
+		// other one already acquired lock. wait outside of m.mu lock
+		m.mu.Unlock()
+		m.rwmu.RLock()
+	} else {
+		// m.rwmu.RLock() never blocks
+		m.rwmu.RLock()
+		m.mu.Unlock()
+	}
+}
+
+// TryRLock try to lock m shared. returns false if fails.
+func (m *TRWMutex) TryRLock() bool {
+	m.mu.Lock()
+	if m.w > 0 {
+		// other one already acquired lock.
+		m.mu.Unlock()
+		return false
+	}
+	m.r++
+	// m.rwmu.RLock() never blocks
+	m.rwmu.RLock()
+	m.mu.Unlock()
+	return true
+}
+
+// RUnlock unlocks m.
+func (m *TRWMutex) RUnlock() {
+	m.mu.Lock()
+	m.r--
+	m.rwmu.RUnlock()
+	m.mu.Unlock()
+}
+
+///////////////////////////////////////////////////////////////////////////////
+var EBADSLT = errors.New("checksum mismatch")
+var EINVAL = errors.New("invalid argument")
+
+type Reader struct {
+	file      *os.File
+	blockSize int
+}
+
+// Create New AppendReader (you just nice wrapper around ReadFromReader adn ScanFromReader)
+// it is *safe* to use it concurrently
+// Example usage
+//	r, err := NewReader(filename, 4096)
+//	if err != nil {
+//		panic(err)
+//	}
+//	// read specific offset
+//	data, _, err := r.Read(docID)
+//	if err != nil {
+//		panic(err)
+//	}
+//	// scan from specific offset
+//	err = r.Scan(0, func(data []byte, offset, next uint32) error {
+//		log.Printf("%v",data)
+//		return nil
+//	})
+//
+// each Read requires 2 syscalls, one to read the header and one to read the data (since the length of the data is in the header).
+// You can reduce that to 1 syscall if your data fits within 1 block, do not set blockSize < 16 because this is the header length.
+// blockSize 0 means 16
+func NewReader(filename string, blockSize int) (*Reader, error) {
+	if blockSize == 0 {
+		blockSize = 16
+	}
+	if blockSize < 16 {
+		return nil, EINVAL
+	}
+
+	fd, err := os.OpenFile(filename, os.O_RDONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	return NewReaderFromFile(fd, blockSize)
+}
+
+func NewReaderFromFile(fd *os.File, blockSize int) (*Reader, error) {
+	if blockSize == 0 {
+		blockSize = 16
+	}
+	if blockSize < 16 {
+		return nil, EINVAL
+	}
+
+	return &Reader{
+		file:      fd,
+		blockSize: blockSize,
+	}, nil
+}
+
+// Scan the open file, if the callback returns error this error is returned as the Scan error. just a wrapper around ScanFromReader.
+func (ar *Reader) Scan(offset uint32, cb func([]byte, uint32, uint32) error) error {
+	return ScanFromReader(ar.file, offset, ar.blockSize, cb)
+}
+
+// Read at specific offset (just wrapper around ReadFromReader), returns the data, next readable offset and error
+func (ar *Reader) Read(offset uint32) ([]byte, uint32, error) {
+	return ReadFromReader(ar.file, offset, ar.blockSize)
+}
+
+func (ar *Reader) Close() error {
+	return ar.file.Close()
+}
+
+// Reads specific offset. returns data, nextOffset, error. You can
+// ReadFromReader(nextOffset) if you want to read the next document, or
+// use the Scan() helper
+func ReadFromReader(reader io.ReaderAt, offset uint32, blockSize int) ([]byte, uint32, error) {
+	b, err := ReadFromReader64(reader, uint64(offset*PAD), blockSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	nextOffset := (offset + ((uint32(16+len(b)))+PAD-1)/PAD)
+	return b, uint32(nextOffset), nil
+}
+
+// Scan ReaderAt, if the callback returns error this error is returned as the Scan error
+func ScanFromReader(reader io.ReaderAt, offset uint32, blockSize int, cb func([]byte, uint32, uint32) error) error {
+	for {
+		data, next, err := ReadFromReader(reader, offset, blockSize)
+		if err == io.EOF {
+			return nil
+		}
+		if err == EBADSLT {
+			// assume corrupted file, so just skip until we find next valid entry
+			offset++
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		err = cb(data, offset, next)
+		if err != nil {
+			return err
+		}
+		offset = next
+	}
 }
